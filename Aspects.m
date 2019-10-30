@@ -9,6 +9,7 @@
 #import <libkern/OSAtomic.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <os/lock.h>
 
 #define AspectLog(...)
 //#define AspectLog(...) do { NSLog(__VA_ARGS__); }while(0)
@@ -46,7 +47,7 @@ typedef struct _AspectBlock {
 
 // Tracks a single aspect.
 @interface AspectIdentifier : NSObject
-+ (instancetype)identifierWithSelector:(SEL)selector object:(id)object options:(AspectOptions)options block:(id)block error:(NSError **)error;
++ (instancetype)identifierWithSelector:(SEL)selector object:(id)object options:(AspectOptions)options block:(id)block error:(NSError __strong **)error;
 - (BOOL)invokeWithInfo:(id<AspectInfo>)info;
 @property (nonatomic, assign) SEL selector;
 @property (nonatomic, strong) id block;
@@ -99,7 +100,7 @@ static NSString *const AspectsMessagePrefix = @"aspects_";
 + (id<AspectToken>)aspect_hookSelector:(SEL)selector
                       withOptions:(AspectOptions)options
                        usingBlock:(id)block
-                            error:(NSError **)error {
+                            error:(NSError __strong **)error {
     return aspect_add((id)self, selector, options, block, error);
 }
 
@@ -107,14 +108,14 @@ static NSString *const AspectsMessagePrefix = @"aspects_";
 - (id<AspectToken>)aspect_hookSelector:(SEL)selector
                       withOptions:(AspectOptions)options
                        usingBlock:(id)block
-                            error:(NSError **)error {
+                            error:(NSError __strong **)error {
     return aspect_add(self, selector, options, block, error);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////
 #pragma mark - Private Helper
 
-static id aspect_add(id self, SEL selector, AspectOptions options, id block, NSError **error) {
+static id aspect_add(id self, SEL selector, AspectOptions options, id block, NSError __strong **error) {
     NSCParameterAssert(self);
     NSCParameterAssert(selector);
     NSCParameterAssert(block);
@@ -135,7 +136,7 @@ static id aspect_add(id self, SEL selector, AspectOptions options, id block, NSE
     return identifier;
 }
 
-static BOOL aspect_remove(AspectIdentifier *aspect, NSError **error) {
+static BOOL aspect_remove(AspectIdentifier *aspect, NSError __strong **error) {
     NSCAssert([aspect isKindOfClass:AspectIdentifier.class], @"Must have correct type.");
 
     __block BOOL success = NO;
@@ -159,10 +160,10 @@ static BOOL aspect_remove(AspectIdentifier *aspect, NSError **error) {
 }
 
 static void aspect_performLocked(dispatch_block_t block) {
-    static OSSpinLock aspect_lock = OS_SPINLOCK_INIT;
-    OSSpinLockLock(&aspect_lock);
+    static os_unfair_lock aspect_lock = OS_UNFAIR_LOCK_INIT;
+    os_unfair_lock_lock(&aspect_lock);
     block();
-    OSSpinLockUnlock(&aspect_lock);
+    os_unfair_lock_unlock(&aspect_lock);
 }
 
 static SEL aspect_aliasForSelector(SEL selector) {
@@ -170,7 +171,7 @@ static SEL aspect_aliasForSelector(SEL selector) {
 	return NSSelectorFromString([AspectsMessagePrefix stringByAppendingFormat:@"_%@", NSStringFromSelector(selector)]);
 }
 
-static NSMethodSignature *aspect_blockMethodSignature(id block, NSError **error) {
+static NSMethodSignature *aspect_blockMethodSignature(id block, NSError __strong **error) {
     AspectBlockRef layout = (__bridge void *)block;
 	if (!(layout->flags & AspectBlockFlagsHasSignature)) {
         NSString *description = [NSString stringWithFormat:@"The block %@ doesn't contain a type signature.", block];
@@ -191,7 +192,7 @@ static NSMethodSignature *aspect_blockMethodSignature(id block, NSError **error)
 	return [NSMethodSignature signatureWithObjCTypes:signature];
 }
 
-static BOOL aspect_isCompatibleBlockSignature(NSMethodSignature *blockSignature, id object, SEL selector, NSError **error) {
+static BOOL aspect_isCompatibleBlockSignature(NSMethodSignature *blockSignature, id object, SEL selector, NSError __strong **error) {
     NSCParameterAssert(blockSignature);
     NSCParameterAssert(object);
     NSCParameterAssert(selector);
@@ -267,7 +268,7 @@ static IMP aspect_getMsgForwardIMP(NSObject *self, SEL selector) {
     return msgForwardIMP;
 }
 
-static void aspect_prepareClassAndHookSelector(NSObject *self, SEL selector, NSError **error) {
+static void aspect_prepareClassAndHookSelector(NSObject *self, SEL selector, NSError __strong **error) {
     NSCParameterAssert(selector);
     Class klass = aspect_hookClass(self, error);
     Method targetMethod = class_getInstanceMethod(klass, selector);
@@ -347,7 +348,7 @@ static void aspect_cleanupHookedClassAndSelector(NSObject *self, SEL selector) {
 ///////////////////////////////////////////////////////////////////////////////////////////
 #pragma mark - Hook Class
 
-static Class aspect_hookClass(NSObject *self, NSError **error) {
+static Class aspect_hookClass(NSObject *self, NSError __strong **error) {
     NSCParameterAssert(self);
 	Class statedClass = self.class;
 	Class baseClass = object_getClass(self);
@@ -565,7 +566,7 @@ static NSMutableDictionary *aspect_getSwizzledClassesDict() {
     return swizzledClassesDict;
 }
 
-static BOOL aspect_isSelectorAllowedAndTrack(NSObject *self, SEL selector, AspectOptions options, NSError **error) {
+static BOOL aspect_isSelectorAllowedAndTrack(NSObject *self, SEL selector, AspectOptions options, NSError __strong **error) {
     static NSSet *disallowedSelectorList;
     static dispatch_once_t pred;
     dispatch_once(&pred, ^{
@@ -807,7 +808,7 @@ static void aspect_deregisterTrackedSelector(id self, SEL selector) {
 
 @implementation AspectIdentifier
 
-+ (instancetype)identifierWithSelector:(SEL)selector object:(id)object options:(AspectOptions)options block:(id)block error:(NSError **)error {
++ (instancetype)identifierWithSelector:(SEL)selector object:(id)object options:(AspectOptions)options block:(id)block error:(NSError __strong **)error {
     NSCParameterAssert(block);
     NSCParameterAssert(selector);
     NSMethodSignature *blockSignature = aspect_blockMethodSignature(block, error); // TODO: check signature compatibility, etc.
